@@ -1,0 +1,520 @@
+/*
+===============================================================================
+DDL Script: Create Gold Views
+===============================================================================
+Script Purpose:
+    This script creates views for the Gold layer in the data warehouse.
+    The Gold layer represents the final dimension and fact tables (Star Schema)
+
+    Each view performs transformations and combines data from the Silver layer
+    to produce a clean, enriched, and business-ready dataset.
+
+Usage:
+    - These views can be queried directly for analytics and reporting.
+===============================================================================
+*/
+
+-- =============================================================================
+-- Create Dimension: gold.dim_customers
+-- =============================================================================
+
+SELECT
+   customer_id,
+   city,
+   signup_date
+FROM silver.customers
+
+--Create surrogate keys with row_number and after that create view
+CREATE VIEW gold.dim_customers AS
+SELECT
+   ROW_NUMBER() OVER(ORDER BY signup_date) AS customer_key,
+   customer_id,
+   city,
+   signup_date
+FROM silver.customers
+
+-- =============================================================================
+-- Create Dimension: gold.dim_employees
+-- =============================================================================
+--STEP 1 : When joining tables, use a LEFT JOIN based on the master table
+SELECT
+    e.employee_id,
+    e.store_id,
+    e.salary,
+    s.city 
+FROM silver.employees e
+LEFT JOIN silver.stores s
+ON e.store_id = s.store_id
+
+--Step 2 : --Create surrogate keys with row_number and after that create view
+CREATE VIEW gold.dim_employees AS
+SELECT
+    ROW_NUMBER() OVER(ORDER BY city) AS employee_key,
+    e.employee_id,
+    e.store_id,
+    e.salary,
+    s.city 
+FROM silver.employees e
+LEFT JOIN silver.stores s
+ON e.store_id = s.store_id
+
+
+
+
+-- =============================================================================
+-- Create Dimension: gold.dim_products
+-- =============================================================================
+--STEP 1 : When joining tables, use a LEFT JOIN based on the master table
+SELECT
+    p.product_id,
+    p.category_id,
+    c.category_name,
+    p.supplier_id,
+    s.country,
+    p.price
+FROM silver.products p
+LEFT JOIN silver.categories c
+ON p.category_id = c.category_id
+LEFT JOIN silver.supplier s
+ON s.supplier_id = p.supplier_id
+
+--STEP 2 : When we do multiple join. We might occured duplicates data. Check duplicates
+
+SELECT
+    product_id,
+    COUNT(*)
+FROM(SELECT
+    p.product_id,
+    p.category_id,
+    c.category_name,
+    p.supplier_id,
+    s.country,
+    p.price
+FROM silver.products p
+LEFT JOIN silver.categories c
+ON p.category_id = c.category_id
+LEFT JOIN silver.supplier s
+ON s.supplier_id = p.supplier_id)t
+GROUP BY product_id
+HAVING COUNT(*) > 1
+
+--Step 3 : --Create surrogate keys with row_number and after that create view
+
+CREATE VIEW gold.dim_products AS
+SELECT
+    ROW_NUMBER() OVER(ORDER BY country) AS product_key,
+    p.product_id,
+    p.category_id,
+    c.category_name,
+    p.supplier_id,
+    s.country,
+    p.price
+FROM silver.products p
+LEFT JOIN silver.categories c
+ON p.category_id = c.category_id
+LEFT JOIN silver.supplier s
+ON s.supplier_id = p.supplier_id
+
+
+-- =============================================================================
+-- Create Dimension: gold.dim_stores
+-- =============================================================================
+--Create surrogate keys and after that create vıew
+CREATE VIEW gold.dim_stores AS
+SELECT
+    ROW_NUMBER() OVER(ORDER BY city) store_key,
+    store_id,
+    city
+FROM silver.stores
+
+
+-- =============================================================================
+-- Create Dimension: gold.dim_promotions
+-- =============================================================================
+--Create surrogate keys and after that create vıew
+
+CREATE VIEW gold.dim_promotions AS
+SELECT
+    ROW_NUMBER() OVER(ORDER BY discount) AS promotion_key,
+    promotion_id,
+    discount
+FROM silver.promotions
+
+
+-- =============================================================================
+-- Create Dimension: gold.fact_orders
+-- =============================================================================
+
+--STEP 1 : When joining tables, use a LEFT JOIN based on the master table
+SELECT
+    o.order_id,
+    cu.customer_key,
+    st.store_key,
+    pr.promotion_key,
+    o.order_date
+FROM silver.orders o
+LEFT JOIN gold.dim_customers cu
+ON o.customer_id = cu.customer_id
+LEFT JOIN gold.dim_stores st
+ON o.store_id = st.store_id
+LEFT JOIN gold.dim_promotions pr
+ON o.promotion_id = pr.promotion_id
+
+
+
+--STEP 2 : When we do multiple join. We might occured duplicates data. Check duplicates
+SELECT
+    order_id,
+    COUNT(*)
+FROM(SELECT
+    o.order_id,
+    cu.customer_key,
+    st.store_key,
+    pr.promotion_key,
+    o.order_date
+FROM silver.orders o
+LEFT JOIN gold.dim_customers cu
+ON o.customer_id = cu.customer_id
+LEFT JOIN gold.dim_stores st
+ON o.store_id = st.store_id
+LEFT JOIN gold.dim_promotions pr
+ON o.promotion_id = pr.promotion_id
+
+)t
+GROUP BY order_id
+HAVING COUNT(*) > 1
+
+--STEP 3 : Sort the columns logically
+
+SELECT
+    o.order_id,
+    cu.customer_key,
+    st.store_key,
+    pr.promotion_key,
+    o.order_date
+FROM silver.orders o
+LEFT JOIN gold.dim_customers cu
+ON o.customer_id = cu.customer_id
+LEFT JOIN gold.dim_stores st
+ON o.store_id = st.store_id
+LEFT JOIN gold.dim_promotions pr
+ON o.promotion_id = pr.promotion_id
+
+
+--STEP 4 : CREATE FACT TABLE VIEW
+CREATE VIEW gold.fact_orders AS
+SELECT
+    o.order_id,
+    cu.customer_key,
+    st.store_key,
+    pr.promotion_key,
+    o.order_date
+FROM silver.orders o
+LEFT JOIN gold.dim_customers cu
+ON o.customer_id = cu.customer_id
+LEFT JOIN gold.dim_stores st
+ON o.store_id = st.store_id
+LEFT JOIN gold.dim_promotions pr
+ON o.promotion_id = pr.promotion_id
+
+DROP VIEW gold.fact_orders
+
+
+-- =============================================================================
+-- Create Dimension: gold.fact_sales
+-- =============================================================================
+--STEP 1 : When joining tables, use a LEFT JOIN based on the master table
+SELECT
+    oi.order_item_id,
+    o.customer_key,
+    pd.product_key,
+    o.store_key,
+    o.promotion_key,
+    oi.order_id,
+    o.order_date,
+    oi.price,
+    oi.qty AS quantity,
+FROM silver.order_items oi
+LEFT JOIN gold.fact_orders o
+ON oi.order_id = o.order_id
+LEFT JOIN gold.dim_products pd
+ON pd.product_id = oi.product_id
+
+
+
+-- STEP 2: Rename column name.
+SELECT
+    oi.order_item_id,
+    o.customer_key,
+    pd.product_key,
+    o.store_key,
+    o.promotion_key,
+    oi.order_id,
+    o.order_date,
+    oi.price,
+    oi.qty AS quantity,
+FROM silver.order_items oi
+LEFT JOIN gold.fact_orders o
+ON oi.order_id = o.order_id
+LEFT JOIN gold.dim_products pd
+ON pd.product_id = oi.product_id
+
+--  STEP 3 : When we do multiple join. We might occured duplicates data. Check duplicates
+
+SELECT
+    order_item_id,
+    COUNT(*)
+FROM(SELECT
+    oi.order_item_id,
+    o.customer_key,
+    pd.product_key,
+    o.store_key,
+    o.promotion_key,
+    oi.order_id,
+    o.order_date,
+    oi.price,
+    oi.qty AS quantity,
+FROM silver.order_items oi
+LEFT JOIN gold.fact_orders o
+ON oi.order_id = o.order_id
+LEFT JOIN gold.dim_products pd
+ON pd.product_id = oi.product_id
+)t
+GROUP BY order_item_id
+HAVING COUNT(*) > 1
+
+
+--STEP 4: CREATE new aggregated columns. Quantity * new_price = sales
+SELECT
+    oi.order_item_id,
+    o.customer_key,
+    pd.product_key,
+    o.store_key,
+    o.promotion_key,
+    oi.order_id,
+    o.order_date,
+    oi.price,
+    oi.qty AS quantity,
+    oi.qty * oi.price AS sales
+FROM silver.order_items oi
+LEFT JOIN gold.fact_orders o
+ON oi.order_id = o.order_id
+LEFT JOIN gold.dim_products pd
+ON pd.product_id = oi.product_id
+
+
+--STEP 5 : Sort the columns logically and create view
+
+CREATE VIEW gold.fact_sales AS
+SELECT
+    oi.order_item_id,
+    o.customer_key,
+    pd.product_key,
+    o.store_key,
+    o.promotion_key,
+    oi.order_id,
+    o.order_date,
+    oi.price,
+    oi.qty AS quantity,
+    oi.qty * oi.price AS sales
+FROM silver.order_items oi
+LEFT JOIN gold.fact_orders o
+ON oi.order_id = o.order_id
+LEFT JOIN gold.dim_products pd
+ON pd.product_id = oi.product_id
+
+-- =============================================================================
+-- Create Dimension: gold.fact_shipments
+-- =============================================================================
+--STEP 1 : When joining tables, use a LEFT JOIN based on the master table
+SELECT
+    s.shipment_id,
+    s.order_id,
+    s.status,
+    o.customer_key,
+    o.store_key,
+    o.order_date
+FROM silver.shipments s
+LEFT JOIN gold.fact_orders o
+ON o.order_id = s.order_id
+
+
+--STEP 2 : When we do multiple join. We might occured duplicates data. Check duplicates
+SELECT
+    shipment_id,
+    COUNT(*)
+FROM(SELECT
+    s.shipment_id,
+    s.order_id,
+    s.status,
+    o.customer_key,
+    o.store_key,
+    o.order_date
+FROM silver.shipments s
+LEFT JOIN gold.fact_orders o
+ON o.order_id = s.order_id)t
+GROUP BY shipment_id
+HAVING COUNT(*) > 1 
+
+
+--STEP 3 : sort columns logically 
+
+SELECT
+    s.shipment_id,
+    o.customer_key,
+    o.store_key,
+    s.order_id,
+    o.order_date,
+    s.status
+FROM silver.shipments s
+LEFT JOIN gold.fact_orders o
+ON o.order_id = s.order_id
+
+
+--STEP 4 : CREATE VIEW
+
+CREATE VIEW gold.fact_shipments AS
+SELECT
+    s.shipment_id,
+    o.customer_key,
+    o.store_key,
+    s.order_id,
+    o.order_date,
+    s.status
+FROM silver.shipments s
+LEFT JOIN gold.fact_orders o
+ON o.order_id = s.order_id
+
+
+-- =============================================================================
+-- Create Dimension: gold.fact_payments
+-- =============================================================================
+
+--STEP 1 : When joining tables, use a LEFT JOIN based on the master table
+ SELECT
+    p.payment_id,
+    p.order_id,
+    p.amount,
+    o.customer_key,
+    o.store_key,
+    o.order_date
+FROM silver.payments p
+LEFT JOIN gold.fact_orders o
+ON o.order_id = p.order_id
+
+
+--STEP 2 : When we do multiple join. We might occured duplicates data. Check duplicates
+SELECT
+    payment_id,
+    COUNT(*)
+ FROM(SELECT
+    p.payment_id,
+    p.order_id,
+    p.amount,
+    o.customer_key,
+    o.store_key,
+    o.order_date
+FROM silver.payments p
+LEFT JOIN gold.fact_orders o
+ON o.order_id = p.order_id)t
+GROUP BY payment_id
+HAVING COUNT(*) > 1
+
+
+--STEP 3 : sort columns logically 
+
+ SELECT
+    p.payment_id,
+    o.customer_key,
+    o.store_key,
+    p.order_id,
+    o.order_date,
+    p.amount
+FROM silver.payments p
+LEFT JOIN gold.fact_orders o
+ON o.order_id = p.order_id
+
+--STEP 4 : CREATE VIEW
+CREATE VIEW gold.fact_payments AS
+ SELECT
+    p.payment_id,
+    o.customer_key,
+    o.store_key,
+    p.order_id,
+    o.order_date,
+    p.amount
+FROM silver.payments p
+LEFT JOIN gold.fact_orders o
+ON o.order_id = p.order_id
+
+
+-- =============================================================================
+-- Create Dimension: gold.fact_returns
+-- =============================================================================
+--STEP 1 : When joining tables, use a LEFT JOIN based on the master table
+SELECT
+    r.return_id,
+    r.order_item_id,
+    r.refund,
+    s.customer_key,
+    s.product_key,
+    s.store_key,
+    s.order_id,
+    s.order_date
+FROM silver.returns r
+LEFT JOIN gold.fact_sales s
+ON r.order_item_id = s.order_item_id
+
+--STEP 2 : When we do multiple join. We might occured duplicates data. Check duplicates
+SELECT
+    return_id,
+    COUNT(*)
+FROM(SELECT
+    r.return_id,
+    r.order_item_id,
+    r.refund,
+    s.customer_key,
+    s.product_key,
+    s.store_key,
+    s.order_id,
+    s.order_date
+FROM silver.returns r
+LEFT JOIN gold.fact_sales s
+ON r.order_item_id = s.order_item_id)t
+GROUP BY return_id
+HAVING COUNT(*) > 1
+
+
+--STEP 3 : sort columns logically 
+
+SELECT
+    r.return_id,
+    r.order_item_id,
+    s.customer_key,
+    s.product_key,
+    s.store_key,
+    s.order_id,
+    s.order_date,
+    r.refund
+FROM silver.returns r
+LEFT JOIN gold.fact_sales s
+ON r.order_item_id = s.order_item_id
+
+
+--STEP 4 : CREATE VIEW
+
+CREATE VIEW gold.fact_returns AS
+SELECT
+    r.return_id,
+    r.order_item_id,
+    s.customer_key,
+    s.product_key,
+    s.store_key,
+    s.order_id,
+    s.order_date,
+    r.refund
+FROM silver.returns r
+LEFT JOIN gold.fact_sales s
+ON r.order_item_id = s.order_item_id
+
+
